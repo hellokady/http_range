@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 const app = express();
 const pathSymbol = Symbol('path');
 
@@ -12,7 +13,7 @@ const ExistFileMiddleware = function (req, res, next) {
     return res.sendStatus(400);
   }
   const fileName = Reflect.get(req.query, 'fileName');
-  const filePath = `./assets/${fileName}`;
+  const filePath = path.resolve(__dirname, `./assets/${fileName}`);
   const existFile = fs.existsSync(filePath);
   if (!existFile) {
     return res.sendStatus(400);
@@ -42,9 +43,26 @@ app.get('/download', ExistFileMiddleware, (req, res) => {
   });
 });
 
+// 目前仅支持一级目录文件
 app.get('/files', (req, res) => {
-  const files = fs.readdirSync('./assets');
-  res.send(files);
+  const dirPath = path.resolve(__dirname, './assets');
+  const existDir = fs.existsSync(dirPath);
+  const result = [];
+
+  if (!existDir) {
+    fs.mkdirSync(dirPath);
+  }
+
+  const files = fs.readdirSync(dirPath);
+  for (const file of files) {
+    const filePath = path.join(dirPath, file);
+    const stat = fs.statSync(filePath);
+    if (stat.isFile()) {
+      result.push(file);
+    }
+  }
+
+  res.send(result);
 });
 
 app.use('*', (req, res) => {
