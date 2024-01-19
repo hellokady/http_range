@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <!-- 「 p-limit的依赖包：yocto-queue、#async_hooks 」 -->
+    <script type="importmap">
+      {
+        "imports": {
+          "yocto-queue": "https://cdn.jsdelivr.net/npm/yocto-queue/index.js",
+          "#async_hooks": "https://cdn.jsdelivr.net/npm/p-limit/async-hooks-stub.js",
+          "limit": "https://cdn.jsdelivr.net/npm/p-limit/index.js"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as limit from 'limit';
+      window.pLimit = limit.default;
+    </script>
+  </head>
+  <body>
+    <div>
+      <label for="files" style="font-family: cursive">文件：</label>
+      <select id="files"></select>
+    </div>
+    <div>
+      <label for="chunk_sizes" style="font-family: cursive">每个包的大小：</label>
+      <select id="chunk_sizes"></select>
+    </div>
+    <button>download</button>
+
+    <script>
+      window.onload = () => {
+        axios.defaults.baseURL = 'http://localhost:3000';
+        // 并发数
+        const LIMIT_COUNT = 10;
+        const btn = document.querySelector('button');
+        const files_node = document.getElementById('files');
+        const chunk_sizes_node = document.getElementById('chunk_sizes');
+        const run = window.pLimit(LIMIT_COUNT);
+        const CHUNK_SIZES = [
+          { label: '1M大小', value: 1 * 1024 * 1024 },
+          { label: '5M大小', value: 5 * 1024 * 1024 },
+          { label: '10M大小', value: 10 * 1024 * 1024 }
+        ];
+
+        let globalFileName = null,
+          globalChunkSize = null;
+
+        files_node.style.display = 'none';
+        btn.addEventListener('click', download);
+        files_node.addEventListener('change', selectFn);
+        chunk_sizes_node.addEventListener('change', selectFn);
+
+        const genOption = function (chunkInfo, i) {
+          const option = document.createElement('option');
+          option.value = chunkInfo.value;
+          option.innerText = chunkInfo.label;
+          if (i === 0) {
+            globalChunkSize = chunkInfo.value;
+          }
+          return option;
+        };
+        insertNodes(genOption)(CHUNK_SIZES, chunk_sizes_node);
+
+        getFiles().then(files => {
+          const genOption = function (fileName, i) {
+            const option = document.createElement('option');
+            option.value = fileName;
+            option.innerText = fileName;
+            if (i === 0) {
+              globalFileName = fileName;
+            }
+            return option;
+          };
+          insertNodes(genOption)(files, files_node);
+          files_node.style.display = 'inline-block';
+        });
+
+        function insertNodes(callback) {
+          return function (nodes, container) {
+            const newNodes = nodes.map(callback);
+            container.append(...newNodes);
+          };
+        }
+
+        function getFiles() {
+          return new Promise((resolve, reject) => {
+            axios.get('/files').then(res => resolve(res.data), reject);
+          });
+        }
+
+        function selectFn(e) {
+          const value = e.target.value;
+          const nodeId = e.target.id;
+          if (nodeId === 'chunk_sizes') {
+            globalChunkSize = value;
+          } else if (nodeId === 'files') {
+            globalFileName = value;
+          }
+        }
+
+        function getFileSize() {
+          return new Promise((resolve, reject) => {
+            axios
+              .get('/size', {
+                params: {
+                  fileName: globalFileName
+                }
+              })
+              .then(res => resolve(res.data.size), reject);
+          });
+        }
+
+        async function concurrencyDownload(size, chunkSize = globalChunkSize) {
+          // 默认最小chunkSize为3M
+          const chunkNum = Math.ceil(size / chunkSize);
+          let fileType = null;
+
+          const downloadTask = [];
+          for (let i = 1; i <= chunkNum; i++) {
+            const rangeStart = chunkSize * (i - 1);
+            const rangeEnd = chunkSize * i - 1;
+
+            downloadTask.push(
+              // 并发任务
+              run(() =>
+                axios.get('/download', {
+                  headers: {
+                    Range: `bytes=${rangeStart}-${rangeEnd}`
+                  },
+                  params: {
+                    fileName: globalFileName
+                  },
+                  responseType: 'arraybuffer'
+                })
+              )
+            );
+          }
+          const arrayBuffers = await Promise.all(
+            downloadTask.map(task => {
+              return task.then(res => {
+                fileType = res.headers['content-type'];
+                return res.data;
+              });
+            })
+          );
+          return [fileType, mergeArrayBuffer(arrayBuffers)];
+        }
+
+        function mergeArrayBuffer(buffers) {
+          let totalLen = 0;
+          for (let arr of buffers) {
+            totalLen += arr.byteLength;
+          }
+          let res = new Uint8Array(totalLen);
+          let offset = 0;
+          for (let arr of buffers) {
+            let uint8Arr = new Uint8Array(arr);
+            res.set(uint8Arr, offset);
+            offset += arr.byteLength;
+          }
+          return res.buffer;
+        }
+
+        async function download() {
+          const fileName = globalFileName;
+          const size = await getFileSize();
+          const [fileType, buffers] = await concurrencyDownload(size);
+          console.log(size, buffers);
+          const blob = new Blob([buffers], { type: fileType });
+          console.log('blob>>>', blob);
+          const file = new File([blob], fileName, { type: fileType });
+          console.log('file>>>', file);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          a.click();
+          a.remove();
+        }
+      };
+    </script>
+  </body>
+</html>
