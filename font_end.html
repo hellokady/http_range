@@ -30,32 +30,37 @@
       <label for="chunk_sizes" style="font-family: cursive">每个包的大小：</label>
       <select id="chunk_sizes"></select>
     </div>
+    <div>
+      <label for="limits" style="font-family: cursive">下载并发数量：</label>
+      <select id="limits"></select>
+    </div>
     <button>download</button>
 
     <script>
       window.onload = () => {
         axios.defaults.baseURL = 'http://localhost:3000';
-        // 并发数
-        const LIMIT_COUNT = 10;
         const btn = document.querySelector('button');
         const files_node = document.getElementById('files');
+        const limits_node = document.getElementById('limits');
         const chunk_sizes_node = document.getElementById('chunk_sizes');
-        const run = window.pLimit(LIMIT_COUNT);
         const CHUNK_SIZES = [
           { label: '1M大小', value: 1 * 1024 * 1024 },
           { label: '5M大小', value: 5 * 1024 * 1024 },
           { label: '10M大小', value: 10 * 1024 * 1024 }
         ];
+        const LIMIT_COUNTS = [5, 10, 25, 50];
 
         let globalFileName = null,
+          globalLimitCount = null,
           globalChunkSize = null;
 
         files_node.style.display = 'none';
         btn.addEventListener('click', download);
         files_node.addEventListener('change', selectFn);
         chunk_sizes_node.addEventListener('change', selectFn);
+        limits_node.addEventListener('change', selectFn);
 
-        const genOption = function (chunkInfo, i) {
+        const genChunkOption = function (chunkInfo, i) {
           const option = document.createElement('option');
           option.value = chunkInfo.value;
           option.innerText = chunkInfo.label;
@@ -64,10 +69,20 @@
           }
           return option;
         };
-        insertNodes(genOption)(CHUNK_SIZES, chunk_sizes_node);
+        const genLimitOption = function (count, i) {
+          const option = document.createElement('option');
+          option.value = count;
+          option.innerText = count;
+          if (i === 0) {
+            globalLimitCount = count;
+          }
+          return option;
+        };
+        insertNodes(genChunkOption)(CHUNK_SIZES, chunk_sizes_node);
+        insertNodes(genLimitOption)(LIMIT_COUNTS, limits_node);
 
         getFiles().then(files => {
-          const genOption = function (fileName, i) {
+          const genFileOption = function (fileName, i) {
             const option = document.createElement('option');
             option.value = fileName;
             option.innerText = fileName;
@@ -76,7 +91,7 @@
             }
             return option;
           };
-          insertNodes(genOption)(files, files_node);
+          insertNodes(genFileOption)(files, files_node);
           files_node.style.display = 'inline-block';
         });
 
@@ -100,6 +115,8 @@
             globalChunkSize = value;
           } else if (nodeId === 'files') {
             globalFileName = value;
+          } else if (nodeId === 'limits') {
+            globalLimitCount = +value;
           }
         }
 
@@ -118,6 +135,7 @@
         async function concurrencyDownload(size, chunkSize = globalChunkSize) {
           // 默认最小chunkSize为3M
           const chunkNum = Math.ceil(size / chunkSize);
+          const run = window.pLimit(globalLimitCount);
           let fileType = null;
 
           const downloadTask = [];
